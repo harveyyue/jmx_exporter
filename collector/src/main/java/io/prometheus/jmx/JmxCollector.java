@@ -2,6 +2,7 @@ package io.prometheus.jmx;
 
 import io.prometheus.client.Collector;
 import io.prometheus.client.Counter;
+import io.prometheus.client.Histogram;
 import org.yaml.snakeyaml.Yaml;
 
 import javax.management.MalformedObjectNameException;
@@ -43,6 +44,13 @@ public class JmxCollector extends Collector implements Collector.Describable {
     static final Counter configReloadFailure = Counter.build()
       .name("jmx_config_reload_failure_total")
       .help("Number of times configuration have failed to be reloaded.").register();
+
+    static final Histogram millisecondsBehindSourceHs = Histogram.build()
+            .name("debezium_metrics_millisecondsbehindsource_hs")
+            .labelNames("context", "name", "plugin")
+            .buckets(200, 500, 700, 1000, 2000, 10000)
+            .help("Histogram of milliseconds behind source")
+            .register();
 
     private static final Logger LOGGER = Logger.getLogger(JmxCollector.class.getName());
 
@@ -576,6 +584,17 @@ public class JmxCollector extends Collector implements Collector.Describable {
         // Add to samples.
         LOGGER.fine("add metric sample: " + matchedRule.name + " " + matchedRule.labelNames + " " + matchedRule.labelValues + " " + value.doubleValue());
         addSample(new MetricFamilySamples.Sample(matchedRule.name, matchedRule.labelNames, matchedRule.labelValues, value.doubleValue()), matchedRule.type, matchedRule.help);
+        if (attrName.equals("MilliSecondsBehindSource") && matchedRule.labelValues.contains("streaming")) {
+          String[] pairs = new String[matchedRule.labelValues.size() * 2];
+          int j = 0;
+          for (int i = 0; i < matchedRule.labelNames.size(); i++) {
+              pairs[j++] = matchedRule.labelNames.get(i);
+              pairs[j++] = matchedRule.labelValues.get(i);
+          }
+          millisecondsBehindSourceHs
+              .labels(matchedRule.labelValues.toArray(String[]::new))
+              .observeWithExemplar(value.doubleValue(), pairs);
+        }
       }
 
     }
