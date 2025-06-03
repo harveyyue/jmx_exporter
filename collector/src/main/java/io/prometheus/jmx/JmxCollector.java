@@ -45,12 +45,7 @@ public class JmxCollector extends Collector implements Collector.Describable {
       .name("jmx_config_reload_failure_total")
       .help("Number of times configuration have failed to be reloaded.").register();
 
-    static final Histogram millisecondsBehindSourceHs = Histogram.build()
-            .name("debezium_metrics_millisecondsbehindsource_hs")
-            .labelNames("context", "name", "plugin")
-            .buckets(200, 500, 700, 1000, 2000, 10000)
-            .help("Histogram of milliseconds behind source")
-            .register();
+    private final Map<String, Histogram> millisecondsBehindSourceHsCache = new HashMap<>();
 
     private static final Logger LOGGER = Logger.getLogger(JmxCollector.class.getName());
 
@@ -584,19 +579,42 @@ public class JmxCollector extends Collector implements Collector.Describable {
         // Add to samples.
         LOGGER.fine("add metric sample: " + matchedRule.name + " " + matchedRule.labelNames + " " + matchedRule.labelValues + " " + value.doubleValue());
         addSample(new MetricFamilySamples.Sample(matchedRule.name, matchedRule.labelNames, matchedRule.labelValues, value.doubleValue()), matchedRule.type, matchedRule.help);
-        if (attrName.equals("MilliSecondsBehindSource") && matchedRule.labelValues.contains("streaming")) {
+        if (attrName.equals("MilliSecondsBehindSource")
+                && matchedRule.labelNames != null
+                && matchedRule.labelValues != null
+                && matchedRule.labelValues.contains("streaming")) {
           String[] pairs = new String[matchedRule.labelValues.size() * 2];
           int j = 0;
           for (int i = 0; i < matchedRule.labelNames.size(); i++) {
               pairs[j++] = matchedRule.labelNames.get(i);
               pairs[j++] = matchedRule.labelValues.get(i);
           }
-          millisecondsBehindSourceHs
-              .labels(matchedRule.labelValues.toArray(String[]::new))
-              .observeWithExemplar(value.doubleValue(), pairs);
+          String[] labelNames = matchedRule.labelNames.toArray(new String[0]);
+          Histogram millisecondsBehindSourceHs = null;
+          if (domain.startsWith("debezium")) {
+              millisecondsBehindSourceHs = millisecondsBehindSourceHsCache.computeIfAbsent(domain, key -> buildMilliSecondsBehindSourceHistogram("debezium_metrics_millisecondsbehindsource_hs", domain, labelNames));
+          } else if (domain.startsWith("jdbc")) {
+              millisecondsBehindSourceHs = millisecondsBehindSourceHsCache.computeIfAbsent(domain, key -> buildMilliSecondsBehindSourceHistogram("jdbc_metrics_millisecondsbehindsource_hs", domain, labelNames));
+          }
+          if (millisecondsBehindSourceHs != null) {
+              millisecondsBehindSourceHs.labels(matchedRule.labelValues.toArray(String[]::new)).observeWithExemplar(value.doubleValue(), pairs);
+          }
         }
       }
 
+    }
+
+    private Histogram buildMilliSecondsBehindSourceHistogram(
+            String name,
+            String domain,
+            String... labelNames) {
+      return Histogram.build()
+              .name(name)
+              .labelNames(labelNames)
+              .buckets(200, 300, 500, 700, 850, 1000, 2000, 5000, 10000, 15000, 30000, 60000,
+                      120000, 300000, 600000, 900000, 1200000, 1800000, 2700000, 3600000)
+              .help("Histogram of milliseconds behind source for " + domain)
+              .register();
     }
 
   public List<MetricFamilySamples> collect() {
